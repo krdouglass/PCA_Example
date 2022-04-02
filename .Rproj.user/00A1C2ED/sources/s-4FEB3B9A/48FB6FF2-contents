@@ -1,0 +1,257 @@
+library(dplyr)
+
+# setting up a power analysis with logistic regression
+
+# to do.
+
+# 1. Reduce the number of slope terms here
+# 2. explore many sites, less ticks vs fewer sites, more ticks
+
+# the average amount of lyme at an average site
+p <- seq(0.2, 0.5, 0.1)
+
+b0 <- log(p/(1-p))
+
+# number of slope terms
+nslope <- 2
+
+# number of ticks at each site
+n <- c(6,1,2,2,15,38,4,2)
+
+# number of sites (with ticks present)
+nsite <- c(10,15,20)
+
+set.seed(111)
+# generate covariates for the design matrix
+X <- matrix(
+  rnorm(
+    max(nsite) * nslope
+  ),    
+  ncol = nslope,
+  nrow = max(nsite)
+) 
+
+# add on 1 for the intercept (for matrix math)
+X <- cbind(1, X)
+
+b1 <- b2 <- c(-1,-0.25,0,0.25,1)
+
+
+all_combos <- expand.grid(
+  nsite = nsite,
+  b0 = b0,
+  b1 = b1,
+  b2 = b2
+)
+
+nsim <- 200
+
+# write a function that will simulate data n times
+results_list <- vector(
+  "list",
+  length= nrow(all_combos)
+)
+
+# for reproducibility
+set.seed(3122020)
+
+pb <- txtProgressBar(max = nrow(all_combos))
+for(i in 1:nrow(all_combos)){
+  
+  setTxtProgressBar(pb, i)
+  
+  results_list[[i]] <- list(
+    est = vector("list", length = nsim),
+    est_distance = vector("list", length = nsim),
+    ac = all_combos[i,]
+  )
+  
+  for(j in 1:nsim){
+    my_n <- sample(n, all_combos[i,1], TRUE )
+    # number of ticks with lyme
+    my_betas <- all_combos[i,
+      grep("^b", colnames(all_combos))
+    ]
+    
+    # create the probability at each site
+    my_logit_probs <- 
+      X[1:all_combos$nsite[i],] %*% as.numeric(my_betas)
+    my_probs <- plogis(my_logit_probs)
+    
+    y <- rbinom(
+      all_combos$nsite[i],
+      size = my_n,
+      p = my_probs
+    )
+    # create y matrix for modeling
+    y_mat <- cbind(
+      y, my_n-y
+    )
+    
+    # fit our model
+    tmp_mod <- glm(
+      y_mat ~ X[1:all_combos$nsite[i],-1],
+      family = "binomial"
+    )
+    
+    # get summary
+    tsum <- summary(tmp_mod)
+    
+    # get probability
+    results_list[[i]]$est[[j]] <- tsum$coefficients
+    
+    # calculate RMSE
+    results_list[[i]]$est_distance[[j]] <- abs(results_list[[i]]$est[[j]][,1] - my_betas)
+  }
+}
+
+to_save <- list(
+  all_combos = all_combos,
+  results = results_list
+)
+
+saveRDS(to_save, "./simulation_runs/ninth_spatial_variation_run.RDS")
+# clean stuff up so we can plot it and whatnot
+
+# fill in average coefficient across simulatoins
+#  plus the proportion of simualtions where
+#  a significant effect was found
+tmp <- vector("list", length = length(results_list))
+for(i in 1:length(tmp)){
+  # combine all the coefficient data.frames
+  #  from each model
+  tmp[[i]] <- data.frame(do.call(
+    "rbind",
+    results_list[[i]]$est
+  )
+  )
+  # remove the stupid long row names
+  row.names(tmp[[i]]) <- NULL
+  # add in the parameter names
+  tmp[[i]]$param <- paste0(
+    "b", 0:nslope
+  )
+  # summarise the simulations
+  tmp[[i]] <- tmp[[i]] %>% 
+    dplyr::group_by(
+      param
+    ) %>% 
+    dplyr::summarise(
+      est_mu = mean(Estimate, na.rm = TRUE),
+      est_lo = quantile(Estimate, probs = 0.025),
+      est_hi = quantile(Estimate, probs = 0.975),
+      pval = mean(Pr...z..<0.05)
+    ) %>% 
+    data.frame
+  # add number of sites sampled
+  tmp[[i]]$nsite = all_combos$nsite[i]
+  # add in true parameter value
+  tmp[[i]]$true_b = as.numeric(results_list[[i]]$ac[
+    ,grep("b", colnames(results_list[[i]]$ac))
+  ])
+}
+
+# bind all of this
+to_plot_coef <- do.call("rbind", tmp)
+
+# split by parameter
+to_plot_coef <- split(
+  to_plot_coef,
+  factor(to_plot_coef$param)
+)
+
+# we want to get the average of 0.3 (-0.8472979 on
+#  logit scale), plus all the large negative effects
+my_slopes <- all_combos[,grep("b1|b2", colnames(all_combos))]
+
+# all simulations with a large and negative effect for slope terms
+slope_be <- t(apply(my_slopes, 1, function(x) x == -1))
+slope_be <- which(rowSums(slope_be) == nslope)
+
+# all simulations with a small and negative effect for slope terms
+slope_se <- t(apply(my_slopes, 1, function(x) x == -0.25))
+slope_se <- which(rowSums(slope_se) == nslope)
+
+
+ # really ugly plots. Still would need to plot out the
+#  small effect size stuff from this simulation.
+
+# plot for est
+
+windows(8,4)
+par(mfrow = c(1,3))
+
+# plot for intercept
+
+my_vals <- rep(1:3, each = 3)
+for(i in 1:3){
+  my_loc <- slope_be[which(my_vals == i)]
+  plot(
+    to_plot_coef$b0$est_mu[my_loc] ~ to_plot_coef$b0$nsite[my_loc],
+    ylab = "beta est.",
+    xlab = "Number of sites",
+    main = paste0("true beta = ", round(unique(to_plot_coef$b0$true_b[my_loc]),2)),
+    type = 'p',
+    las = 1,
+    bty = "l"
+  )
+}
+
+
+# plot for intercept, significance
+windows(8,4)
+par(mfrow = c(1,3))
+my_vals <- rep(1:3, each = 3)
+for(i in 1:3){
+  my_loc <- slope_be[which(my_vals == i)]
+  plot(
+    to_plot_coef$b0$pval[my_loc] ~ to_plot_coef$b0$nsite[my_loc],
+    ylab = "prop. significant",
+    xlab = "Number of sites",
+    main = paste0("true beta = ", round(unique(to_plot_coef$b0$true_b[my_loc]),2)),
+    type = 'p',
+    las = 1,
+    bty = "l",
+    pch = 19,
+    cex = 2
+  )
+}
+
+
+windows(8,4)
+par(mfrow = c(1,3))
+
+# plot for slope
+
+my_vals <- rep(1:3, each = 3)
+for(i in 1:3){
+  my_loc <- slope_be[which(my_vals == i)]
+  plot(
+    to_plot_coef$b1$est_mu[my_loc] ~ to_plot_coef$b1$nsite[my_loc],
+    ylab = "beta est.",
+    xlab = "Number of sites",
+    main = paste0("true beta = ", round(unique(to_plot_coef$b1$true_b[my_loc]),2)),
+    type = 'p',
+    las = 1,
+    bty = "l"
+  )
+}
+
+# plot for slope significance
+
+windows(8,4)
+par(mfrow = c(1,3))
+my_vals <- rep(1:3, each = 3)
+for(i in 1:3){
+  my_loc <- slope_be[which(my_vals == i)]
+  plot(
+    to_plot_coef$b1$pval[my_loc] ~ to_plot_coef$b1$nsite[my_loc],
+    ylab = "prop significant",
+    xlab = "Number of sites",
+    main = paste0("true beta = ", round(unique(to_plot_coef$b1$true_b[my_loc]),2)),
+    type = 'p',
+    las = 1,
+    bty = "l"
+  )
+}
+

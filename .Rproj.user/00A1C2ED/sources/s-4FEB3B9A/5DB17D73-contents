@@ -1,0 +1,93 @@
+##################################################################
+# This code is to conduct a global PCA with all species data
+# to create urban indicies
+# 
+###################################################################
+
+# To Clear working environment
+rm(list=ls())
+graphics.off()
+
+# Load libraries
+library(dplyr)
+
+
+# Set Working Directory
+setwd(
+  "C:/Users/Kim Fake/Dropbox/Kim Fake/Research/ABC Wildlife"
+)
+
+# Read data
+opossum <- read.csv (
+  './data/Opossum/Opossum Full Dataset - 10000 PA.csv', 
+  stringsAsFactors = FALSE
+)
+
+raccoon <- read.csv (
+  './data/Raccoon/Raccoon Full Dataset - 10000 PA.csv', 
+  stringsAsFactors = FALSE
+)
+
+squirrel <- read.csv (
+'./data/Squirrel/Squirrel Full Dataset - 10000 PA.csv', 
+stringsAsFactors = FALSE
+)
+
+skunk <- read.csv (
+  './data/Skunk/Skunk Full Dataset - 10000 PA.csv', 
+  stringsAsFactors = FALSE
+)
+
+#add species columns
+opossum$Species <- "Opossum"
+raccoon$Species <- "Raccoon"
+squirrel$Species <- "Squirrel"
+skunk$Species <- "Skunk"
+
+#make one dataframe
+data <-rbind(opossum, raccoon, skunk, squirrel)
+
+#get rid of unneeded row
+data <- data[,2:31]
+
+#modify Location Name
+data$LocationName <- 1:nrow(data)
+
+# PCA ---------------------------------------------------------------------
+
+# do a PCA with...
+my_pca <- prcomp(~imperv + tree + HU10,
+                 data = data,
+                 center = TRUE,
+                 scale. = TRUE)
+
+print(my_pca)
+summary(my_pca)
+biplot(my_pca)
+
+PCs = as.data.frame(my_pca$x)
+PCs$LocationName <- data$LocationName
+
+#merge housing and landscape data
+data <- merge(data, PCs, by = "LocationName")
+
+#flip PC1
+data$PC1 <- data$PC1*-1
+data$PC2 <- data$PC2
+
+#remove rows with na's
+#note: there were some rows with income and vacancy NAs
+data <- data[!is.na(data$Median_Income),]
+data <- data[!is.na(data$Vacant_housing_units),]
+
+
+#Save data with PCs
+write.csv(
+  data, 
+  "./data/All Species Full Dataset plus PCs - 10000 PA.csv" 
+)
+
+#Look for correlations in variables
+cor(data$tree, data$imperv)
+cor(data$HU10, data$imperv)
+cor(data$HU10, data$tree) 
